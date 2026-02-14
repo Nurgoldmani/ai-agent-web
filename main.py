@@ -26,7 +26,6 @@ def ask_groq(text: str) -> str:
             {"role": "system", "content": "Ты полезный AI ассистент."},
             {"role": "user", "content": text},
         ],
-        "temperature": 0.7,
     }
 
     try:
@@ -39,18 +38,14 @@ def ask_groq(text: str) -> str:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    reply = ask_groq(user_text)
-    await update.message.reply_text(reply)
+    await update.message.reply_text(ask_groq(update.message.text))
 
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
-
     print("🤖 Bot started")
     app.run_polling()
 
