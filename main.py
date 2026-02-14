@@ -1,6 +1,5 @@
 import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import Updater, MessageHandler, Filters
 from groq import Groq
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -8,7 +7,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 client = Groq(api_key=GROQ_API_KEY)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_message(update, context):
     user_text = update.message.text
 
     try:
@@ -21,16 +20,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         reply = completion.choices[0].message.content
-        await update.message.reply_text(reply)
+        update.message.reply_text(reply)
 
     except Exception as e:
         print("GROQ ERROR:", e)
-        await update.message.reply_text("⚠️ Ошибка AI. Попробуй позже.")
+        update.message.reply_text("⚠️ Ошибка AI. Попробуй позже.")
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
