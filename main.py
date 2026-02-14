@@ -1,49 +1,74 @@
 import os
-import logging
+import requests
+from flask import Flask
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
-# ----------------- LOGGING -----------------
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+# ========================
+# CONFIG
+# ========================
+TELEGRAM_TOKEN = os.environ.get("BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# ----------------- TOKEN -----------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL = "llama3-8b-8192"
 
-if not BOT_TOKEN:
-    raise RuntimeError("❌ BOT_TOKEN not found in environment variables")
-
-# ----------------- HANDLERS -----------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+# ========================
+# TELEGRAM HANDLERS
+# ========================
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text(
         "👋 Бот запущен и работает 24/7!\n\nНапиши любое сообщение."
     )
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    await update.message.reply_text(f"🤖 Ты написал:\n{text}")
+def handle_message(update: Update, context: CallbackContext):
+    user_text = update.message.text
 
-# ----------------- MAIN -----------------
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": "Ты умный и дружелюбный AI помощник."},
+            {"role": "user", "content": user_text}
+        ],
+        "temperature": 0.7
+    }
+
+    try:
+        response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=20)
+        data = response.json()
+
+        reply = data["choices"][0]["message"]["content"]
+        update.message.reply_text(reply)
+
+    except Exception as e:
+        update.message.reply_text("⚠️ Ошибка AI. Попробуй позже.")
+
+# ========================
+# KEEP-ALIVE WEB SERVER
+# ========================
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is alive", 200
+
+# ========================
+# MAIN
+# ========================
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-    print("🤖 Bot started. Polling...")
-
-    # 🔑 КЛЮЧЕВАЯ СТРОКА ДЛЯ RAILWAY
-    app.run_polling(
-        stop_signals=None  # отключаем SIGTERM / SIGINT от Railway
-    )
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
