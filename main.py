@@ -1,7 +1,12 @@
 import os
 import requests
 from telegram import Update
-from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -12,16 +17,16 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 def ask_groq(text: str) -> str:
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     payload = {
         "model": "llama3-8b-8192",
         "messages": [
             {"role": "system", "content": "Ты полезный AI ассистент."},
-            {"role": "user", "content": text}
+            {"role": "user", "content": text},
         ],
-        "temperature": 0.7
+        "temperature": 0.7,
     }
 
     try:
@@ -33,21 +38,21 @@ def ask_groq(text: str) -> str:
         return "⚠️ Ошибка AI. Попробуй позже."
 
 
-def handle_message(update: Update, context: CallbackContext):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     reply = ask_groq(user_text)
-    update.message.reply_text(reply)
+    await update.message.reply_text(reply)
 
 
 def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
 
     print("🤖 Bot started")
-    updater.start_polling()
-    updater.idle()
+    app.run_polling()
 
 
 if __name__ == "__main__":
