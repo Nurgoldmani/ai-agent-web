@@ -1,79 +1,62 @@
 import os
 import logging
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CommandHandler,
-    ContextTypes,
-    filters,
-)
-
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from openai import OpenAI
 
-# ---------------- CONFIG ----------------
+# ---------- CONFIG ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not BOT_TOKEN or not GROQ_API_KEY:
-    raise RuntimeError("BOT_TOKEN или GROQ_API_KEY не заданы в Variables")
+    raise RuntimeError("❌ BOT_TOKEN или GROQ_API_KEY не заданы")
 
-# Groq (OpenAI-compatible)
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 
-# ---------------- HANDLERS ----------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+# ---------- HANDLERS ----------
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text(
         "👋 Привет! Я AI-ассистент.\n\n"
-        "Задай любой вопрос — я отвечу 🤖"
+        "Напиши любой вопрос — отвечу 🤖"
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_message(update: Update, context: CallbackContext):
     user_text = update.message.text
 
     try:
         response = client.chat.completions.create(
             model="llama3-8b-8192",
             messages=[
-                {
-                    "role": "system",
-                    "content": "Ты умный, дружелюбный AI-ассистент. Отвечай кратко и по делу."
-                },
-                {
-                    "role": "user",
-                    "content": user_text
-                }
+                {"role": "system", "content": "Ты полезный и дружелюбный AI-ассистент."},
+                {"role": "user", "content": user_text}
             ],
             temperature=0.7,
             max_tokens=500,
         )
 
-        ai_reply = response.choices[0].message.content
-        await update.message.reply_text(ai_reply)
+        reply = response.choices[0].message.content
+        update.message.reply_text(reply)
 
     except Exception as e:
-        logging.exception("Ошибка Groq")
-        await update.message.reply_text(
-            "⚠️ Произошла ошибка при обращении к AI. Попробуй позже."
-        )
+        logging.exception("Groq error")
+        update.message.reply_text("⚠️ Ошибка AI. Попробуй позже.")
 
-# ---------------- MAIN ----------------
+# ---------- MAIN ----------
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-    logging.info("🤖 AI Bot started. Polling...")
-    app.run_polling()
+    logging.info("🤖 AI Bot started (polling)")
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
