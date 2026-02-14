@@ -1,40 +1,34 @@
 import os
-import json
-import urllib.request
+import requests
 from telegram.ext import Updater, MessageHandler, Filters
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+def ask_groq(prompt: str) -> str:
+    url = "https://api.groq.com/openai/v1/chat/completions"
 
-def ask_groq(user_text):
-    data = {
-        "model": "llama3-70b-8192",
-        "messages": [
-            {"role": "system", "content": "Ты полезный AI-помощник. Отвечай кратко и понятно."},
-            {"role": "user", "content": user_text}
-        ]
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
 
-    req = urllib.request.Request(
-        GROQ_URL,
-        data=json.dumps(data).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-    )
+    data = {
+        "model": "llama3-8b-8192",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7
+    }
 
-    with urllib.request.urlopen(req) as response:
-        result = json.loads(response.read().decode("utf-8"))
-        return result["choices"][0]["message"]["content"]
+    r = requests.post(url, headers=headers, json=data, timeout=30)
+    r.raise_for_status()
 
-def handle_message(update, context):
-    text = update.message.text
+    return r.json()["choices"][0]["message"]["content"]
 
+def handle(update, context):
     try:
-        reply = ask_groq(text)
+        reply = ask_groq(update.message.text)
         update.message.reply_text(reply)
     except Exception as e:
         print("AI ERROR:", e)
@@ -42,10 +36,7 @@ def handle_message(update, context):
 
 def main():
     updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
+    updater.dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle))
     updater.start_polling()
     updater.idle()
 
