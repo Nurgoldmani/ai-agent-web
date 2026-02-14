@@ -1,179 +1,163 @@
 import os
 import logging
 import requests
-from collections import defaultdict, deque
-from datetime import date
+from datetime import datetime, timedelta
 
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LabeledPrice
+)
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
+    ContextTypes,
     filters,
+    PreCheckoutQueryHandler
 )
 
 # ================== НАСТРОЙКИ ==================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.1-8b-instant"
-
-FREE_LIMIT = 5  # бесплатные сообщения в день
-
-# ================== ПРОВЕРКИ ==================
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN")
 
 if not BOT_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN не найден")
 if not GROQ_API_KEY:
     raise RuntimeError("❌ GROQ_API_KEY не найден")
+if not PAYMENT_PROVIDER_TOKEN:
+    raise RuntimeError("❌ PAYMENT_PROVIDER_TOKEN не найден")
 
-# ================== ЛОГИ ==================
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama3-70b-8192"  # актуальная, стабильная модель
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+FREE_LIMIT = 5          # сообщений в день
+PREMIUM_DAYS = 30       # срок подписки
+PRICE_KZT = 1990        # цена подписки
 
-# ================== ПАМЯТЬ ==================
+logging.basicConfig(level=logging.INFO)
 
-user_memory = defaultdict(lambda: deque(maxlen=6))
-
-# ================== ЛИМИТЫ ==================
-
-user_usage = defaultdict(lambda: {"date": date.today(), "count": 0})
-premium_users = set()  # позже подключим оплату
-
-# ================== SYSTEM PROMPT ==================
-
-SYSTEM_PROMPT = """
-You are an AI Web3 & Crypto Assistant.
-
-Your mission:
-- Explain cryptocurrency, blockchain, Web3, AI agents, DeFi in simple language
-- Help users understand real ways to earn in crypto and AI ecosystems
-- Give structured, step-by-step answers
-- Focus on practical tools and strategies
-- Avoid hype, scams, and vague advice
-
-Rules:
-- If a question is not related to crypto, Web3, AI, or earning online — politely redirect
-- Do not give financial guarantees
-- Be clear, professional, and helpful
-"""
+# ================== ХРАНИЛИЩЕ ==================
+USERS = {}  # user_id: {count, reset_at, premium_until}
 
 # ================== GROQ ==================
-
-def ask_groq(user_id: int, user_text: str) -> str:
+def ask_groq(text: str) -> str:
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
-
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(user_memory[user_id])
-    messages.append({"role": "user", "content": user_text})
-
     payload = {
         "model": GROQ_MODEL,
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 500,
+        "messages": [
+            {"role": "system", "content": "Ты профессиональный AI-консультант по бизнесу, крипто и технологиям."},
+            {"role": "user", "content": text}
+        ],
+        "temperature": 0.7
     }
 
-    response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
-    response.raise_for_status()
+    r = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"]
 
-    answer = response.json()["choices"][0]["message"]["content"]
+# ================== ЛОГИКА ==================
+def get_user(user_id: int):
+    now = datetime.utcnow()
+    user = USERS.get(user_id)
 
-    user_memory[user_id].append({"role": "user", "content": user_text})
-    user_memory[user_id].append({"role": "assistant", "content": answer})
+    if not user or user["reset_at"] < now:
+        user = {
+            "count": 0,
+            "reset_at": now + timedelta(days=1),
+            "premium_until": None
+        }
+        USERS[user_id] = user
 
-    return answer
+    return user
+
+def is_premium(user):
+    return user["premium_until"] and user["premium_until"] > datetime.utcnow()
 
 # ================== КОМАНДЫ ==================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 *AI-Консультант*\n\n"
+        "🆓 Бесплатно: 5 сообщений в день\n"
+        "💎 Premium: без лимитов + приоритет\n\n"
+        "Напиши вопрос или оформи подписку 👇"
+    )
+    keyboard = [
+        [InlineKeyboardButton("💎 Купить Premium", callback_data="buy")]
+    ]
     await update.message.reply_text(
-        "🤖 AI Web3 & Crypto Assistant\n\n"
-        "Я помогаю разбираться в:\n"
-        "• Криптовалютах\n"
-        "• Web3 и DeFi\n"
-        "• AI-агентах и Fetch.ai\n"
-        "• Реальных способах заработка\n\n"
-        f"🆓 Бесплатно: {FREE_LIMIT} сообщений в день\n"
-        "💎 Premium — без ограничений\n\n"
-        "Задавай вопрос 👇"
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📌 Что я умею:\n\n"
-        "• Объяснять крипту простыми словами\n"
-        "• Помогать понять, как зарабатывать в Web3\n"
-        "• Разбирать AI-агентов и Fetch.ai\n"
-        "• Давать пошаговые инструкции\n\n"
-        "Команды:\n"
-        "/start — начало\n"
-        "/premium — Premium доступ"
-    )
-
-async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "💎 Premium доступ\n\n"
-        "Что даёт Premium:\n"
-        "• Безлимитные запросы\n"
-        "• Приоритетные ответы\n"
-        "• Доступ к продвинутым темам\n\n"
-        "Оплата скоро будет доступна.\n"
-        "Следи за обновлениями 🚀"
-    )
-
-# ================== ОБРАБОТКА СООБЩЕНИЙ ==================
-
+# ================== СООБЩЕНИЯ ==================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-    today = date.today()
+    user_id = update.message.from_user.id
+    user = get_user(user_id)
 
-    # сброс лимита каждый день
-    if user_usage[user_id]["date"] != today:
-        user_usage[user_id] = {"date": today, "count": 0}
-
-    # проверка лимита
-    if user_id not in premium_users:
-        if user_usage[user_id]["count"] >= FREE_LIMIT:
+    if not is_premium(user):
+        if user["count"] >= FREE_LIMIT:
             await update.message.reply_text(
-                "🚫 Лимит бесплатных сообщений исчерпан.\n\n"
-                "💎 Оформи Premium, чтобы продолжить без ограничений.\n"
-                "Команда: /premium"
+                "❌ Лимит бесплатных сообщений исчерпан.\n\n"
+                "💎 Оформи Premium для безлимитного доступа."
             )
             return
+        user["count"] += 1
 
-        user_usage[user_id]["count"] += 1
+    try:
+        await update.message.chat.send_action("typing")
+        answer = ask_groq(update.message.text)
+        await update.message.reply_text(answer)
+    except Exception as e:
+        logging.exception(e)
+        await update.message.reply_text("⚠️ Ошибка AI. Попробуй позже.")
 
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action="typing",
+# ================== ПОКУПКА ==================
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    prices = [LabeledPrice("Premium подписка (30 дней)", PRICE_KZT * 100)]
+
+    await query.message.reply_invoice(
+        title="AI-Консультант Premium",
+        description="Безлимитный доступ к AI на 30 дней",
+        payload="premium_sub",
+        provider_token=PAYMENT_PROVIDER_TOKEN,
+        currency="KZT",
+        prices=prices
     )
 
-    answer = ask_groq(user_id, text)
-    await update.message.reply_text(answer)
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user = get_user(user_id)
+    user["premium_until"] = datetime.utcnow() + timedelta(days=PREMIUM_DAYS)
+
+    await update.message.reply_text(
+        "✅ *Premium активирован!*\n\n"
+        "Теперь у тебя безлимитный доступ 🎉",
+        parse_mode="Markdown"
+    )
 
 # ================== MAIN ==================
-
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("premium", premium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    logging.info("✅ AI Web3 & Crypto Assistant с лимитами запущен")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
