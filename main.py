@@ -1,17 +1,22 @@
 import os
+from fastapi import FastAPI, Request
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://xxx.up.railway.app
+
+app = FastAPI()
+tg_app = Application.builder().token(BOT_TOKEN).build()
 
 # ---------- PUBLIC REPORT ----------
 async def public_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -23,8 +28,7 @@ async def public_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 10% — инвестиционные проекты\n"
         "🔹 10% — благотворительность\n"
         "🔹 10% — поддержка сервиса\n\n"
-        "_Проект работает по кооперативной модели._\n"
-        "_Доход не гарантируется._"
+        "_Проект работает по кооперативной модели._"
     )
 
     if update.message:
@@ -32,70 +36,52 @@ async def public_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.callback_query.message.reply_text(text, parse_mode="Markdown")
 
-
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "👋 Добро пожаловать в *NurAgent*\n\n"
-        "NurAgent — кооперативный AI-проект.\n"
-        "Прозрачная модель, открытая отчётность,\n"
-        "участие добровольное.\n\n"
-        "Выберите действие 👇"
-    )
-
     keyboard = [
         [InlineKeyboardButton("📊 Публичный отчёт", callback_data="public_report")],
-        [InlineKeyboardButton("📜 Правила проекта", callback_data="rules")],
-        [InlineKeyboardButton("🤝 Стать партнёром", callback_data="partner")],
+        [InlineKeyboardButton("📜 Правила", callback_data="rules")],
+        [InlineKeyboardButton("🤝 Партнёрство", callback_data="partner")],
     ]
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
-        text,
-        reply_markup=reply_markup,
+        "👋 *NurAgent*\n\nКооперативный AI-проект.\nВыберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
 
-
 # ---------- BUTTONS ----------
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    q = update.callback_query
+    await q.answer()
 
-    if query.data == "public_report":
+    if q.data == "public_report":
         await public_report(update, context)
 
-    elif query.data == "rules":
-        await query.message.reply_text(
-            "📜 *Правила проекта*\n\n"
-            "— участие добровольное\n"
-            "— доход не гарантируется\n"
-            "— распределение согласно README\n"
-            "— проект находится в разработке",
-            parse_mode="Markdown",
-        )
+    elif q.data == "rules":
+        await q.message.reply_text("📜 Правила см. в README.")
 
-    elif query.data == "partner":
-        await query.message.reply_text(
-            "🤝 *Стать партнёром*\n\n"
-            "Партнёрство открыто.\n"
-            "Следите за обновлениями или свяжитесь с администратором.\n\n"
-            "_Автоматическая регистрация будет добавлена позже._",
-            parse_mode="Markdown",
-        )
+    elif q.data == "partner":
+        await q.message.reply_text("🤝 Напишите администратору.")
 
+# ---------- TELEGRAM ROUTES ----------
+@app.on_event("startup")
+async def on_startup():
+    tg_app.add_handler(CommandHandler("start", start))
+    tg_app.add_handler(CommandHandler("public_report", public_report))
+    tg_app.add_handler(CallbackQueryHandler(buttons))
 
-# ---------- MAIN ----------
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    await tg_app.initialize()
+    await tg_app.bot.set_webhook(f"{WEBHOOK_URL}/telegram")
+    await tg_app.start()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("public_report", public_report))
-    app.add_handler(CallbackQueryHandler(buttons))
+@app.post("/telegram")
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.process_update(update)
+    return {"ok": True}
 
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+@app.get("/")
+def root():
+    return {"status": "NurAgent online"}
