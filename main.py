@@ -1,70 +1,82 @@
 import os
-import logging
+import uuid
+from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
-    CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
+from gtts import gTTS
 
-# -------------------------
-# НАСТРОЙКИ
-# -------------------------
+# =========================
+# ENV
+# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
-    raise RuntimeError("❌ Переменная BOT_TOKEN не задана")
+    raise RuntimeError("BOT_TOKEN не задан в переменных окружения")
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+# =========================
+# FastAPI
+# =========================
+app = FastAPI()
+
+# =========================
+# Telegram Application
+# =========================
+telegram_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+# =========================
+# TTS (Text -> Voice)
+# =========================
+def text_to_voice(text: str, lang: str = "ru") -> str:
+    filename = f"voice_{uuid.uuid4().hex}.mp3"
+    tts = gTTS(text=text, lang=lang)
+    tts.save(filename)
+    return filename
+
+# =========================
+# Message handler
+# =========================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_text = update.message.text
+
+    # 🔹 ЛОГИКА ОТВЕТА (можешь заменить на свою)
+    reply_text = f"Вы написали: {user_text}"
+
+    # 🔊 Озвучка
+    voice_file = text_to_voice(reply_text)
+
+    # 📤 Отправка voice
+    with open(voice_file, "rb") as audio:
+        await context.bot.send_voice(chat_id=chat_id, voice=audio)
+
+    # 🧹 Очистка
+    os.remove(voice_file)
+
+# =========================
+# Register handler
+# =========================
+telegram_app.add_handler(
+    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
 )
 
-# -------------------------
-# КОМАНДЫ БОТА
-# -------------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 NurAgent запущен и работает!\n\n"
-        "Доступные команды:\n"
-        "/start — старт\n"
-        "/report — публичный отчёт\n"
-        "/help — помощь"
-    )
+# =========================
+# Webhook endpoint (Railway)
+# =========================
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"ok": True}
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "ℹ️ Помощь\n\n"
-        "Этот бот — кооперативный AI-проект.\n"
-        "Отчёт открыт для всех участников."
-    )
-
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "📊 ПУБЛИЧНЫЙ ОТЧЁТ\n\n"
-        "💰 Общий доход: $0\n"
-        "👥 Активных партнёров: 0\n\n"
-        "📌 Распределение:\n"
-        "• 70% — партнёрам\n"
-        "• 10% — инвестиции\n"
-        "• 10% — благотворительность\n"
-        "• 10% — оплата сервисов\n\n"
-        "⏱ Обновляется автоматически"
-    )
-    await update.message.reply_text(text)
-
-# -------------------------
-# ЗАПУСК
-# -------------------------
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("report", report))
-
-    logging.info("🚀 NurAgent bot started (polling)")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+# =========================
+# Root (health check)
+# =========================
+@app.get("/")
+async def root():
+    return {"status": "ok"}
