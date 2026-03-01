@@ -1,4 +1,6 @@
 python-telegram-bot==20.7
-fastapi
-uvicorn
-gTTS
+openai-whisper
+edge-tts
+groq
+ffmpeg-python
+torch
